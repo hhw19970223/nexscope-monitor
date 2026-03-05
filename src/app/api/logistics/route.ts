@@ -12,23 +12,29 @@
  * Docs: https://datahelpdesk.worldbank.org/knowledgebase/articles/889392
  * Data: https://lpi.worldbank.org/
  *
- * Fallback: returns 2023 static data if World Bank API is unreachable.
+ * Trend calculation:
+ *   Both DATA_YEAR and PREV_DATA_YEAR overall scores are fetched.
+ *   Countries are ranked (by score, descending) for each year independently
+ *   among the tracked set. Rank delta determines trend:
+ *     prev_rank > curr_rank → "up"   (improved position)
+ *     prev_rank < curr_rank → "down" (worsened position)
+ *     |delta| <= 1          → "stable"
+ *
  * Cache: revalidates every 24 hours (LPI data is updated annually).
  */
 
 import { NextResponse } from "next/server";
 import { logisticsSupplement } from "@/lib/data/logistics";
 import type { LogisticsData, LogisticsApiResponse } from "@/types";
+import { DATA_YEAR, PREV_DATA_YEAR } from "@/lib/const";
 
 export const runtime = "edge";
-export const revalidate = 86400; // 24 hours — WB LPI is annual data
+export const revalidate = 86400;
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const WB_BASE = "https://api.worldbank.org/v2";
-const DATA_YEAR = "2023";
-
 const COUNTRY_CODES = logisticsSupplement.map((s) => s.countryCode).join(";");
+const WB_BASE = `https://api.worldbank.org/v2/country/${COUNTRY_CODES}/indicator/`;
 
 const INDICATORS = {
   overall:        "LP.LPI.OVRL.XQ",
@@ -46,29 +52,61 @@ interface WBPoint {
   date: string;
 }
 
-async function fetchIndicator(indicator: string): Promise<Map<string, number>> {
+async function fetchIndicator(
+  indicator: string,
+  year: string
+): Promise<Map<string, number>> {
   const url =
-    `${WB_BASE}/country/${COUNTRY_CODES}/indicator/${indicator}` +
-    `?format=json&date=${DATA_YEAR}&per_page=100`;
-
-  console.log(url);
+    `${WB_BASE}${indicator}` +
+    `?format=json&date=${year}&per_page=100`;
 
   const res = await fetch(url, {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   });
 
-  if (!res.ok) throw new Error(`WB API ${indicator}: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`WB API ${indicator}@${year}: HTTP ${res.status}`);
 
   const json = await res.json() as [unknown, WBPoint[]];
   const points = json[1] ?? [];
 
-  // Build country-code → value map (skip nulls)
   return new Map(
     points
       .filter((p) => p.value !== null && p.value !== undefined)
       .map((p) => [p.country.id, p.value as number])
   );
+}
+
+// ─── Rank map builder ─────────────────────────────────────────────────────────
+//
+// Derives a rank (1 = best) among the tracked country set by sorting
+// their scores descending. Using derived rank (not WB official rank)
+// keeps comparisons consistent when the tracked set changes.
+
+function buildRankMap(scoreMap: Map<string, number>): Map<string, number> {
+  const sorted = [...scoreMap.entries()].sort((a, b) => b[1] - a[1]);
+  const rankMap = new Map<string, number>();
+  sorted.forEach(([code], idx) => rankMap.set(code, idx + 1));
+  return rankMap;
+}
+
+// ─── Trend calculator ─────────────────────────────────────────────────────────
+
+function calcTrend(
+  code: string,
+  currRankMap: Map<string, number>,
+  prevRankMap: Map<string, number>
+): LogisticsData["trend"] {
+  const curr = currRankMap.get(code);
+  const prev = prevRankMap.get(code);
+
+  // Can't determine if either year has no data
+  if (curr === undefined || prev === undefined) return "stable";
+
+  const delta = prev - curr; // positive = rank improved (lower number = better)
+  if (delta >= 2) return "up";
+  if (delta <= -2) return "down";
+  return "stable";
 }
 
 // ─── Score → status helper ────────────────────────────────────────────────────
@@ -80,61 +118,39 @@ function toStatus(score: number): LogisticsData["status"] {
   return "poor";
 }
 
-// ─── Static fallback (2023 WB LPI values, hardcoded as last resort) ───────────
-
-const FALLBACK_SCORES: Record<string, Pick<LogisticsData, "lpiScore" | "customsScore" | "infrastructureScore" | "trackingScore" | "timelinessScore">> = {
-  SG: { lpiScore: 4.30, customsScore: 4.20, infrastructureScore: 4.40, trackingScore: 4.50, timelinessScore: 4.70 },
-  FI: { lpiScore: 4.20, customsScore: 4.10, infrastructureScore: 4.30, trackingScore: 4.30, timelinessScore: 4.50 },
-  DE: { lpiScore: 4.20, customsScore: 4.00, infrastructureScore: 4.30, trackingScore: 4.30, timelinessScore: 4.40 },
-  NL: { lpiScore: 4.10, customsScore: 4.00, infrastructureScore: 4.20, trackingScore: 4.30, timelinessScore: 4.50 },
-  JP: { lpiScore: 4.00, customsScore: 3.90, infrastructureScore: 4.10, trackingScore: 4.30, timelinessScore: 4.50 },
-  GB: { lpiScore: 4.00, customsScore: 3.80, infrastructureScore: 4.00, trackingScore: 4.10, timelinessScore: 4.30 },
-  FR: { lpiScore: 4.00, customsScore: 3.90, infrastructureScore: 4.00, trackingScore: 4.10, timelinessScore: 4.20 },
-  CA: { lpiScore: 3.90, customsScore: 3.80, infrastructureScore: 4.00, trackingScore: 4.00, timelinessScore: 4.10 },
-  US: { lpiScore: 3.90, customsScore: 3.80, infrastructureScore: 4.00, trackingScore: 4.20, timelinessScore: 4.10 },
-  KR: { lpiScore: 3.80, customsScore: 3.80, infrastructureScore: 3.90, trackingScore: 4.10, timelinessScore: 4.20 },
-  AE: { lpiScore: 3.80, customsScore: 3.70, infrastructureScore: 3.90, trackingScore: 3.80, timelinessScore: 4.00 },
-  CN: { lpiScore: 3.70, customsScore: 3.70, infrastructureScore: 3.90, trackingScore: 3.90, timelinessScore: 3.80 },
-  AU: { lpiScore: 3.70, customsScore: 3.60, infrastructureScore: 3.70, trackingScore: 3.90, timelinessScore: 3.80 },
-  TH: { lpiScore: 3.40, customsScore: 3.30, infrastructureScore: 3.40, trackingScore: 3.40, timelinessScore: 3.60 },
-  IN: { lpiScore: 3.40, customsScore: 3.20, infrastructureScore: 3.30, trackingScore: 3.50, timelinessScore: 3.50 },
-  SA: { lpiScore: 3.30, customsScore: 3.20, infrastructureScore: 3.40, trackingScore: 3.20, timelinessScore: 3.50 },
-  ZA: { lpiScore: 3.10, customsScore: 3.00, infrastructureScore: 3.10, trackingScore: 3.10, timelinessScore: 3.30 },
-  BR: { lpiScore: 3.00, customsScore: 2.70, infrastructureScore: 2.90, trackingScore: 3.10, timelinessScore: 3.20 },
-  MX: { lpiScore: 3.00, customsScore: 2.80, infrastructureScore: 2.90, trackingScore: 3.10, timelinessScore: 3.30 },
-  ID: { lpiScore: 3.00, customsScore: 2.80, infrastructureScore: 2.80, trackingScore: 3.10, timelinessScore: 3.20 },
-};
-
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function GET(): Promise<NextResponse<LogisticsApiResponse>> {
   const fetchedAt = new Date().toISOString();
 
   try {
-    // Fetch all 5 indicators in parallel — eliminates waterfall latency
-    const [overall, customs, infrastructure, tracking, timeliness] =
+    // Fetch all indicators for current year + overall for previous year in parallel
+    const [overall, customs, infrastructure, tracking, timeliness, prevOverall] =
       await Promise.all([
-        fetchIndicator(INDICATORS.overall),
-        fetchIndicator(INDICATORS.customs),
-        fetchIndicator(INDICATORS.infrastructure),
-        fetchIndicator(INDICATORS.tracking),
-        fetchIndicator(INDICATORS.timeliness),
+        fetchIndicator(INDICATORS.overall,        DATA_YEAR),
+        fetchIndicator(INDICATORS.customs,        DATA_YEAR),
+        fetchIndicator(INDICATORS.infrastructure, DATA_YEAR),
+        fetchIndicator(INDICATORS.tracking,       DATA_YEAR),
+        fetchIndicator(INDICATORS.timeliness,     DATA_YEAR),
+        fetchIndicator(INDICATORS.overall,        PREV_DATA_YEAR),
       ]);
 
-    // Require at least the overall score for a country to be included
     if (overall.size === 0) throw new Error("World Bank returned empty dataset");
 
-    // Merge live WB scores with static supplement (carriers, delivery, trend)
+    // Build rank maps for trend comparison
+    const currRankMap = buildRankMap(overall);
+    const prevRankMap = buildRankMap(prevOverall);
+
     const items: LogisticsData[] = logisticsSupplement
       .filter((s) => overall.has(s.countryCode))
       .map((s) => {
         const code = s.countryCode;
         const score = overall.get(code)!;
         return {
-          countryCode:           code,
-          countryName:           s.countryName,
-          lpiScore:              score,
-          lpiRank:               s.lpiRank,
+          countryCode:          code,
+          countryName:          s.countryName,
+          lpiScore:             score,
+          lpiRank:              currRankMap.get(code)!,
           customsScore:         customs.get(code)        ?? score,
           infrastructureScore:  infrastructure.get(code) ?? score,
           trackingScore:        tracking.get(code)       ?? score,
@@ -142,11 +158,11 @@ export async function GET(): Promise<NextResponse<LogisticsApiResponse>> {
           avgDeliveryDays:      s.avgDeliveryDays,
           carriers:             s.carriers,
           status:               toStatus(score),
-          trend:                s.trend,
+          trend:                calcTrend(code, currRankMap, prevRankMap),
           lastUpdated:          fetchedAt,
         };
       })
-      .sort((a, b) => b.lpiScore - a.lpiScore);
+      .sort((a, b) => a.lpiRank - b.lpiRank);
 
     const body: LogisticsApiResponse = {
       items,
@@ -167,36 +183,16 @@ export async function GET(): Promise<NextResponse<LogisticsApiResponse>> {
     });
 
   } catch (err) {
-    // Graceful fallback: return 2023 hardcoded values so UI never breaks
     console.error("[/api/logistics] World Bank fetch failed:", err);
 
-    const items: LogisticsData[] = logisticsSupplement.map((s) => {
-      const scores = FALLBACK_SCORES[s.countryCode];
-      return {
-        countryCode:           s.countryCode,
-        countryName:           s.countryName,
-        lpiScore:              scores?.lpiScore              ?? 3.0,
-        lpiRank:               s.lpiRank,
-        customsScore:         scores?.customsScore         ?? 3.0,
-        infrastructureScore:  scores?.infrastructureScore  ?? 3.0,
-        trackingScore:        scores?.trackingScore        ?? 3.0,
-        timelinessScore:      scores?.timelinessScore      ?? 3.0,
-        avgDeliveryDays:      s.avgDeliveryDays,
-        carriers:             s.carriers,
-        status:               toStatus(scores?.lpiScore ?? 3.0),
-        trend:                s.trend,
-        lastUpdated:          fetchedAt,
-      };
-    }).sort((a, b) => b.lpiScore - a.lpiScore);
-
     const body: LogisticsApiResponse = {
-      items,
+      items: [],
       meta: {
         source:      "fallback",
-        provider:    "World Bank LPI 2023 (cached)",
+        provider:    `World Bank LPI ${DATA_YEAR} (cached)`,
         providerUrl: "https://lpi.worldbank.org/",
         indicator:   Object.values(INDICATORS).join(", "),
-        dataYear:    2023,
+        dataYear:    parseInt(DATA_YEAR),
         fetchedAt,
       },
     };

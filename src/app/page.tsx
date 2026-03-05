@@ -5,6 +5,7 @@ import { LogisticsPanel } from "@/components/organisms/LogisticsPanel";
 import { PlatformsPanel } from "@/components/organisms/PlatformsPanel";
 import { MarketOverview } from "@/components/organisms/MarketOverview";
 import type { Metadata } from "next";
+import { DATA_YEAR } from "@/lib/const";
 
 export const metadata: Metadata = {
   title: "NexScope Monitor — Global E-Commerce Intelligence Dashboard",
@@ -70,7 +71,7 @@ export default function HomePage() {
         <div className="flex items-center justify-center gap-4">
           <span>NexScope Monitor © {new Date().getFullYear()}</span>
           <span>·</span>
-          <span>Data: World Bank LPI 2023 · Statista · eMarketer</span>
+          <span>Data: World Bank LPI {` ${DATA_YEAR} `} · Statista · eMarketer</span>
           <span>·</span>
           <span>News: TechCrunch · Retail Dive · FreightWaves</span>
         </div>
