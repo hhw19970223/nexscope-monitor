@@ -56,6 +56,20 @@ export interface MapCountryData {
   status?: "hot" | "growing" | "stable" | "emerging";
 }
 
+export interface DataSourceMeta {
+  source: "live" | "fallback";
+  provider: string;
+  providerUrl: string;
+  indicator?: string;
+  dataYear: number;
+  fetchedAt: string;
+}
+
+export interface LogisticsApiResponse {
+  items: LogisticsData[];
+  meta: DataSourceMeta;
+}
+
 export interface MarketMetric {
   label: string;
   value: string | number;

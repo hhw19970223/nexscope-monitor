@@ -68,7 +68,7 @@ export function MarketOverview() {
     >
       <PanelHeader
         title="Global Market Overview"
-        subtitle="Key metrics · Updated Q4 2024"
+        subtitle=""
         live
       />
 

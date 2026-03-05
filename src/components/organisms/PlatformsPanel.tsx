@@ -4,6 +4,7 @@ import { useState } from "react";
 import { TrendingUp, ShoppingCart } from "lucide-react";
 import { platformData, getTopMarkets } from "@/lib/data/platforms";
 import { PanelHeader } from "@/components/atoms/PanelHeader";
+import { DataSourceTag } from "@/components/atoms/DataSourceTag";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import type { PlatformData } from "@/types";
@@ -170,6 +171,16 @@ export function PlatformsPanel() {
           Select a country above
         </div>
       )}
+
+      {/* Data source attribution */}
+      <div className="mt-2 pt-2 border-t border-white/5 flex-shrink-0">
+        <DataSourceTag
+          source="static"
+          provider="Statista · eMarketer · Company IR Reports"
+          providerUrl="https://www.statista.com/markets/413/e-commerce/"
+          dataYear={2024}
+        />
+      </div>
     </div>
   );
 }

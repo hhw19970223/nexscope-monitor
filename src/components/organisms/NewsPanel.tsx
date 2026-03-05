@@ -6,6 +6,7 @@ import { formatDistanceToNow } from "date-fns";
 import { Newspaper, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
 import { PanelHeader } from "@/components/atoms/PanelHeader";
 import { SeverityDot } from "@/components/atoms/SeverityDot";
+import { DataSourceTag } from "@/components/atoms/DataSourceTag";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { NewsItem } from "@/types";
@@ -21,8 +22,17 @@ const CATEGORY_COLORS: Record<NewsItem["category"], string> = {
   general: "#64748b",
 };
 
+interface NewsApiResponse {
+  items: NewsItem[];
+  total: number;
+  source: "live";
+  breakdown: Record<string, number>;
+  feedCount: number;
+  feedStatus?: Array<{ source: string; count: number; ok: boolean }>;
+}
+
 export function NewsPanel() {
-  const { data, isLoading } = useSWR<{ items: NewsItem[]; source: string }>(
+  const { data, isLoading } = useSWR<NewsApiResponse>(
     "/api/news",
     fetcher,
     { refreshInterval: 300_000 }
@@ -33,7 +43,9 @@ export function NewsPanel() {
 
   const categories = ["all", "logistics", "platform", "policy", "market", "technology"] as const;
 
-  const items = data?.items ?? [];
+  const items = (data?.items ?? []).sort(
+    (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+  );
   const filtered = filter === "all" ? items : items.filter((i) => i.category === filter);
 
   function toggleExpand(id: string) {
@@ -52,7 +64,7 @@ export function NewsPanel() {
     >
       <PanelHeader
         title="E-Commerce Intelligence Feed"
-        subtitle={data?.source === "live" ? "Live RSS · 5 min refresh" : "Curated · Demo data"}
+        subtitle={`Live RSS · ${data?.feedCount ?? 9} feeds · 5 min refresh`}
         live
         icon={<Newspaper className="w-3.5 h-3.5" />}
       >
@@ -93,13 +105,13 @@ export function NewsPanel() {
           <div className="text-center text-[#64748b] text-[11px] py-8">No items in this category</div>
         ) : (
           <div className="space-y-1.5">
-            {filtered.map((item) => {
+            {filtered.map((item, idx) => {
               const isExpanded = expanded.has(item.id);
               const color = CATEGORY_COLORS[item.category];
 
               return (
                 <div
-                  key={item.id}
+                  key={item.id + '_' + idx}
                   className="news-item rounded border p-2.5 cursor-pointer"
                   style={{ borderColor: "rgba(255,255,255,0.05)" }}
                   onClick={() => toggleExpand(item.id)}
@@ -182,6 +194,17 @@ export function NewsPanel() {
           </div>
         )}
       </ScrollArea>
+
+      {/* Data source attribution */}
+      <div className="mt-2 pt-2 border-t border-white/5 flex-shrink-0">
+        <DataSourceTag
+          source="live"
+          provider="TechCrunch · FreightWaves · Supply Chain Dive · PYMNTS · DC360 · AP Business · CNBC · WTO · Retail Dive · NRF"
+          providerUrl="https://techcrunch.com/tag/e-commerce/"
+          dataYear={new Date().getFullYear()}
+          fetchedAt={data ? new Date().toISOString() : undefined}
+        />
+      </div>
     </div>
   );
 }

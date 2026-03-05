@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import useSWR from "swr";
 import { ComposableMap, Geographies, Geography, ZoomableGroup, Marker, type Geography as GeoType } from "react-simple-maps";
-import { logisticsData } from "@/lib/data/logistics";
 import { platformData } from "@/lib/data/platforms";
 import { PanelHeader } from "@/components/atoms/PanelHeader";
 import { Globe2 } from "lucide-react";
+import type { LogisticsApiResponse, LogisticsData } from "@/types";
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 const GEO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
@@ -32,8 +35,8 @@ const countryNameToCode: Record<string, string> = {
   "South Africa": "ZA",
 };
 
-function getLPIColor(code: string): string {
-  const lpi = logisticsData.find((l) => l.countryCode === code);
+function getLPIColor(code: string, items: LogisticsData[]): string {
+  const lpi = items.find((l: LogisticsData) => l.countryCode === code);
   if (!lpi) return "#1a2035";
   if (lpi.lpiScore >= 4.0) return "rgba(76,136,241,0.7)";
   if (lpi.lpiScore >= 3.5) return "rgba(76,136,241,0.4)";
@@ -53,6 +56,14 @@ export function WorldMap() {
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"logistics" | "platforms">("logistics");
 
+  // Share the same SWR cache key as LogisticsPanel — no duplicate fetch
+  const { data: lpiResp } = useSWR<LogisticsApiResponse>(
+    "/api/logistics",
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 3_600_000 }
+  );
+  const lpiItems: LogisticsData[] = lpiResp?.items ?? [];
+
   const handleMouseEnter = useCallback((geo: GeoType, x: number, y: number) => {
     const name = geo.properties.name as string;
     const code = countryNameToCode[name];
@@ -68,7 +79,7 @@ export function WorldMap() {
     setSelectedCountry(code || null);
   }, []);
 
-  const selectedLPI = selectedCountry ? logisticsData.find((l) => l.countryCode === selectedCountry) : null;
+  const selectedLPI = selectedCountry ? lpiItems.find((l: LogisticsData) => l.countryCode === selectedCountry) : null;
   const selectedPlatform = selectedCountry ? platformData.find((p) => p.countryCode === selectedCountry) : null;
 
   return (
@@ -113,7 +124,7 @@ export function WorldMap() {
                   const name = geo.properties.name as string;
                   const code = countryNameToCode[name];
                   const isSelected = code && code === selectedCountry;
-                  const fillColor = viewMode === "logistics" && code ? getLPIColor(code) : "#1a2035";
+                  const fillColor = viewMode === "logistics" && code ? getLPIColor(code, lpiItems) : "#1a2035";
 
                   return (
                     <Geography
@@ -184,7 +195,7 @@ export function WorldMap() {
           >
             <div className="font-bold">{tooltip.name}</div>
             {tooltip.code && (() => {
-              const lpi = logisticsData.find((l) => l.countryCode === tooltip.code);
+              const lpi = lpiItems.find((l: LogisticsData) => l.countryCode === tooltip.code);
               if (lpi) return (
                 <div className="text-[#4C88F1]">LPI: {lpi.lpiScore.toFixed(1)} · Rank #{lpi.lpiRank}</div>
               );
